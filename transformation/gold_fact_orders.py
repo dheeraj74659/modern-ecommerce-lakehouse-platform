@@ -2,6 +2,7 @@ import logging
 from pyspark.sql.functions import col, sum as spark_sum
 from delta.tables import DeltaTable
 from utils.spark_session import create_spark_session
+from data_quality.validation_framework import DataQualityValidator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("FactOrders")
@@ -34,7 +35,15 @@ def main():
             ).agg(
                 spark_sum("order_amount").alias("total_amount")
             )
-
+        
+        # Run validations before writing
+        validator = DataQualityValidator()
+        validator.validate_not_null(fact_df, ["order_id", "customer_sk", "product_sk"])
+        validator.validate_no_duplicates(fact_df, "order_id")
+        validator.validate_foreign_key(fact_df, dim_customers, "customer_sk", "customer_sk")
+        
+        validator.validate()
+        
         if not DeltaTable.isDeltaTable(spark, GOLD_PATH):
 
             fact_df.write.format("delta") \
@@ -43,7 +52,7 @@ def main():
             return
 
         delta_table = DeltaTable.forPath(spark, GOLD_PATH)
-
+        
         # Idempotent upsert for fact table
         delta_table.alias("target").merge(
             fact_df.alias("source"),
